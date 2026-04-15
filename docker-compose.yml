@@ -1,0 +1,144 @@
+# Secure4K Sidecar Platform — pilot stack.
+#
+# Required env vars (see .env.example): VALID_API_KEYS, SEQUENCENOW_*.
+# `make up` brings everything up; `make smoke` runs the pilot smoke test.
+services:
+  ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      PORT: "8090"
+      DATABASE_URL: "postgres://secure4k:secure4k@postgres:5432/sidecar?sslmode=disable"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_BUCKET: "sidecar-frames"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin"
+      S3_REGION: "us-east-1"
+      LOCAL_FRAME_PATH: "/data/frames"
+      OLLAMA_URL: "http://ollama:11434"
+      INFERENCE_MODEL: "llava"
+      INFERENCE_THRESHOLD: "0.6"
+      SEQUENCENOW_URL: "${SEQUENCENOW_URL}"
+      SEQUENCENOW_API_KEY: "${SEQUENCENOW_API_KEY}"
+      MQTT_BROKER_URL: "tcp://mosquitto:1883"
+      VALID_API_KEYS: "${VALID_API_KEYS}"
+      PIPELINE_WORKERS: "4"
+      PIPELINE_QUEUE_SIZE: "1000"
+      OTA_BUNDLE_PATH: "/data/ota"
+      RATE_LIMIT_PER_SEC: "${RATE_LIMIT_PER_SEC:-2}"
+      RATE_LIMIT_BURST: "${RATE_LIMIT_BURST:-10}"
+      FRAME_TIMEOUT: "${FRAME_TIMEOUT:-45s}"
+      INFERENCE_TIMEOUT: "${INFERENCE_TIMEOUT:-20s}"
+    volumes:
+      - frame-data:/data/frames
+      - ota-data:/data/ota
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---- PostgreSQL ----
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: secure4k
+      POSTGRES_PASSWORD: secure4k
+      POSTGRES_DB: sidecar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secure4k -d sidecar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- MQTT broker ----
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./backend/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+    restart: unless-stopped
+
+  # ---- S3-compatible storage ----
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  # ---- MinIO bucket init ----
+  minio-init:
+    image: minio/mc:latest
+    entrypoint: >
+      /bin/sh -c "
+        sleep 5;
+        mc alias set local http://minio:9000 minioadmin minioadmin;
+        mc mb local/sidecar-frames --ignore-existing;
+        mc anonymous set download local/sidecar-frames;
+        echo 'Bucket ready';
+      "
+    depends_on:
+      - minio
+
+  # ---- Ollama (AI inference) ----
+  # GPU reservation is opt-in via the `gpu` profile so the pilot stack boots
+  # on CPU-only machines. Run with: `docker compose --profile gpu up -d` to
+  # enable the nvidia reservation.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+  # ---- Pull vision model on first run (one-shot) ----
+  ollama-init:
+    image: curlimages/curl:latest
+    entrypoint: >
+      /bin/sh -c "
+        sleep 15;
+        until curl -sf http://ollama:11434/api/tags >/dev/null; do
+          echo waiting for ollama; sleep 5;
+        done;
+        curl -sf -X POST http://ollama:11434/api/pull -d '{\"name\":\"${INFERENCE_MODEL:-llava}\"}' || true;
+        echo 'ollama-init done';
+      "
+    depends_on:
+      - ollama
+    restart: "no"
+
+volumes:
+  pg-data:
+  mqtt-data:
+  minio-data:
+  ollama-data:
+  frame-data:
+  ota-data:
