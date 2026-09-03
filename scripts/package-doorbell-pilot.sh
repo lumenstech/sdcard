@@ -11,13 +11,13 @@ rm -rf "$DIST" "$ZIP" "$SHA"
 mkdir -p "$DIST/config" "$DIST/scripts" "$DIST/buffer" "$DIST/updates"
 
 cp sdcard/initrun.sh "$DIST/initrun.sh"
+cp sdcard/initrun.sh "$DIST/run.sh"
+cp sdcard/initrun.sh "$DIST/custom.sh"
 cp sdcard/scripts/*.sh "$DIST/scripts/"
 cp sdcard/config/version "$DIST/config/version"
 cp sdcard/config/device.conf "$DIST/config/device.conf.example"
 
-chmod +x "$DIST/initrun.sh" "$DIST/scripts/"*.sh
-ln -sf initrun.sh "$DIST/run.sh"
-ln -sf initrun.sh "$DIST/custom.sh"
+chmod +x "$DIST/initrun.sh" "$DIST/run.sh" "$DIST/custom.sh" "$DIST/scripts/"*.sh
 
 cat > "$DIST/RELEASE-MANIFEST.txt" <<EOF
 Secure4K Sidecar Doorbell Pilot
@@ -26,6 +26,7 @@ Target: Chinese doorbell/IP camera pilot
 Mode: SD-card sidecar; does not replace camera firmware
 Default transport: HTTP (MQTT optional)
 Expected mount point on camera: /mnt/mmc01
+Filesystem: FAT32-compatible; boot hooks are ordinary files, not symlinks
 
 Required first-pilot validation:
 - boot hook executes
