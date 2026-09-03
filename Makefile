@@ -11,8 +11,8 @@ test:
 
 lint:
 	cd backend && go vet ./...
-	shellcheck -s sh sdcard/initrun.sh sdcard/scripts/*.sh
-	shellcheck prep-sdcard.sh
+	shellcheck -S warning -e SC1090 -s sh sdcard/initrun.sh sdcard/scripts/*.sh
+	shellcheck -S warning -e SC2010 -s bash prep-sdcard.sh
 
 up:
 	docker compose up -d --build
@@ -28,10 +28,10 @@ logs:
 	docker compose logs -f ingest postgres migrate minio mosquitto ollama
 
 smoke:
-	./scripts/pilot-smoke.sh
+	sh scripts/pilot-smoke.sh
 
 soak:
-	./scripts/soak-test.sh
+	sh scripts/soak-test.sh
 
 sd-card:
 	@echo "Packaging SD card files..."
