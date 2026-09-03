@@ -59,7 +59,11 @@ jobs:
       - name: Go tests
         working-directory: backend
         run: go test ./... -count=1 -race
-      - name: Shellcheck
-        run: shellcheck -s sh sdcard/initrun.sh sdcard/scripts/*.sh prep-sdcard.sh
+      - name: Shellcheck SD runtime
+        run: shellcheck -s sh sdcard/initrun.sh sdcard/scripts/*.sh
+      - name: Shellcheck prep tool
+        run: shellcheck -s bash prep-sdcard.sh
+      - name: Sidecar reliability assumptions
+        run: ./scripts/test-sidecar-assumptions.sh
       - name: Compose validation
         run: VALID_API_KEYS=pilot-test-key docker compose config --quiet
