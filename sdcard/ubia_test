@@ -1,0 +1,78 @@
+#!/bin/ash
+# Secure4K UBIA/UBox SD autorun probe
+# Expected vendor mount: /tmp/mnt/sdcard
+# This probe is read-only with respect to camera firmware. It writes diagnostics only to the SD card.
+
+SD=/tmp/mnt/sdcard
+OUT="$SD/secure4k_ubia_probe.log"
+DONE="$SD/secure4k_ubia_probe.done"
+
+{
+  echo "Secure4K UBIA probe"
+  echo "started=$(date 2>/dev/null || echo unknown)"
+  echo "pwd=$(pwd 2>/dev/null || echo unknown)"
+  echo "uid=$(id 2>/dev/null || echo unknown)"
+  echo
+
+  echo "=== uname ==="
+  uname -a 2>&1 || true
+  echo
+
+  echo "=== cpuinfo ==="
+  cat /proc/cpuinfo 2>&1 || true
+  echo
+
+  echo "=== cmdline ==="
+  cat /proc/cmdline 2>&1 || true
+  echo
+
+  echo "=== mounts ==="
+  cat /proc/mounts 2>&1 || mount 2>&1 || true
+  echo
+
+  echo "=== filesystems ==="
+  cat /proc/filesystems 2>&1 || true
+  echo
+
+  echo "=== memory ==="
+  cat /proc/meminfo 2>&1 || true
+  echo
+
+  echo "=== processes ==="
+  ps 2>&1 || busybox ps 2>&1 || true
+  echo
+
+  echo "=== network ==="
+  ifconfig -a 2>&1 || ip addr 2>&1 || busybox ifconfig -a 2>&1 || true
+  echo
+
+  echo "=== routes ==="
+  route -n 2>&1 || ip route 2>&1 || true
+  echo
+
+  echo "=== binaries ==="
+  for x in ash sh busybox curl wget tftp nc telnetd ffmpeg; do
+    command -v "$x" 2>/dev/null || true
+  done
+  echo
+
+  echo "=== sd root ==="
+  ls -la "$SD" 2>&1 || true
+  echo
+
+  echo "=== candidate UBIA processes/files ==="
+  ps 2>/dev/null | grep -Ei 'ubia|t31|t23|ingenic|ipc|first|meari|tuya|pps' || true
+  find /tmp /home /mnt -maxdepth 3 -type f \( -name '*ubia*' -o -name '*log*' -o -name '*config*' \) 2>/dev/null | head -n 200 || true
+  echo
+
+  echo "=== dmesg tail ==="
+  dmesg 2>&1 | tail -n 200 || true
+  echo
+
+  echo "completed=$(date 2>/dev/null || echo unknown)"
+} > "$OUT" 2>&1
+
+sync 2>/dev/null || true
+echo "secure4k-ubia-probe-complete" > "$DONE"
+sync 2>/dev/null || true
+exit 0
