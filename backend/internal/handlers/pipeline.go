@@ -65,13 +65,7 @@ func NewPipeline(cfg PipelineConfig) *Pipeline {
 		cfg.RateLimitPerMinute = 120
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Pipeline{
-		cfg:    cfg,
-		queue:  make(chan *FrameJob, cfg.QueueSize),
-		ctx:    ctx,
-		cancel: cancel,
-		rates:  make(map[string]rateWindow),
-	}
+	return &Pipeline{cfg: cfg, queue: make(chan *FrameJob, cfg.QueueSize), ctx: ctx, cancel: cancel, rates: make(map[string]rateWindow)}
 }
 
 func (p *Pipeline) Start() {
@@ -82,7 +76,6 @@ func (p *Pipeline) Start() {
 	slog.Info("pipeline started", "workers", p.cfg.Workers, "queue_size", p.cfg.QueueSize, "rate_limit_per_minute", p.cfg.RateLimitPerMinute)
 }
 
-// Stop closes admission and drains accepted work before cancelling the shared context.
 func (p *Pipeline) Stop() {
 	p.stopOnce.Do(func() {
 		close(p.queue)
@@ -97,7 +90,7 @@ func (p *Pipeline) allowDevice(deviceID string, now time.Time) bool {
 	defer p.rateMu.Unlock()
 	window := p.rates[deviceID]
 	if window.started.IsZero() || now.Sub(window.started) >= time.Minute {
-		window = rateWindow{started: now, count: 0}
+		window = rateWindow{started: now}
 	}
 	if window.count >= p.cfg.RateLimitPerMinute {
 		p.rates[deviceID] = window
@@ -116,8 +109,6 @@ func (p *Pipeline) allowDevice(deviceID string, now time.Time) bool {
 	return true
 }
 
-// Submit applies shared admission policy for every transport: bounded per-device
-// rate, durable idempotency claim, and a bounded in-memory processing queue.
 func (p *Pipeline) Submit(ctx context.Context, job *FrameJob) error {
 	if job == nil || job.DeviceID == "" {
 		return errors.New("invalid frame job")
@@ -152,37 +143,30 @@ func (p *Pipeline) processFrame(ctx context.Context, job *FrameJob) {
 	start := time.Now()
 	frameKey, err := p.cfg.FrameStore.Store(ctx, job.DeviceID, job.Timestamp, job.ImageData)
 	if err != nil {
-		slog.Error("frame store failed", "device", job.DeviceID, "error", err)
+		slog.Error("frame store failed; releasing ingest claim for retry", "device", job.DeviceID, "error", err)
+		if releaseErr := p.cfg.DeviceStore.ReleaseFrame(ctx, job.DeviceID, job.Timestamp); releaseErr != nil {
+			slog.Error("failed to release ingest claim after storage failure", "device", job.DeviceID, "error", releaseErr)
+		}
 		return
 	}
 
 	result, err := p.cfg.Inference.Detect(ctx, job.ImageData)
 	if err != nil {
 		slog.Warn("inference unavailable; frame persisted without detection", "device", job.DeviceID, "error", err)
-		if eventErr := p.cfg.DeviceStore.CreateEvent(ctx, &device.Event{
-			DeviceID: job.DeviceID, FrameKey: frameKey, Type: "frame",
-			Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC(),
-		}); eventErr != nil {
+		if eventErr := p.cfg.DeviceStore.CreateEvent(ctx, &device.Event{DeviceID: job.DeviceID, FrameKey: frameKey, Type: "frame", Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC()}); eventErr != nil {
 			slog.Error("frame event creation failed", "device", job.DeviceID, "error", eventErr)
 		}
 		return
 	}
 
 	if len(result.Detections) == 0 {
-		if err := p.cfg.DeviceStore.CreateEvent(ctx, &device.Event{
-			DeviceID: job.DeviceID, FrameKey: frameKey, Type: "frame",
-			Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC(),
-		}); err != nil {
+		if err := p.cfg.DeviceStore.CreateEvent(ctx, &device.Event{DeviceID: job.DeviceID, FrameKey: frameKey, Type: "frame", Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC()}); err != nil {
 			slog.Error("frame event creation failed", "device", job.DeviceID, "error", err)
 		}
 	}
 
 	for _, det := range result.Detections {
-		event := &device.Event{
-			DeviceID: job.DeviceID, FrameKey: frameKey, Type: "detection",
-			Class: det.Class, Confidence: det.Confidence, BBox: det.BBox,
-			Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC(),
-		}
+		event := &device.Event{DeviceID: job.DeviceID, FrameKey: frameKey, Type: "detection", Class: det.Class, Confidence: det.Confidence, BBox: det.BBox, Timestamp: job.Timestamp, ReceivedAt: job.ReceivedAt, ProcessedAt: time.Now().UTC()}
 		if err := p.cfg.DeviceStore.CreateEvent(ctx, event); err != nil {
 			slog.Error("event creation failed", "device", job.DeviceID, "error", err)
 			continue
@@ -201,7 +185,6 @@ func (p *Pipeline) processFrame(ctx context.Context, job *FrameJob) {
 			slog.Info("alert sent", "device", job.DeviceID, "class", det.Class, "confidence", det.Confidence)
 		}
 	}
-
 	slog.Debug("frame processed", "device", job.DeviceID, "elapsed_ms", time.Since(start).Milliseconds(), "detections", len(result.Detections))
 }
 
