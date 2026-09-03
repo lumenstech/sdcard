@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,20 +15,25 @@ import (
 	"github.com/lumenstech/secure4k-sidecar/internal/storage"
 )
 
-func TestPipelinePersistsOnceWhenInferenceUnavailable(t *testing.T) {
+func testStoreAndDevice(t *testing.T, prefix string) (*device.Store, *device.Device) {
+	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
-	ctx := context.Background()
 	store, err := device.NewStore(device.StoreConfig{DatabaseURL: dbURL})
 	if err != nil { t.Fatal(err) }
-	defer store.Close()
-
-	mac := fmt.Sprintf("02:30:00:%02x:%02x:%02x", time.Now().UnixNano()&0xff, (time.Now().UnixNano()>>8)&0xff, (time.Now().UnixNano()>>16)&0xff)
-	dev, err := store.Create(ctx, &device.Device{MAC: mac, RegisteredAt: time.Now().UTC()})
+	t.Cleanup(store.Close)
+	n := time.Now().UnixNano()
+	mac := fmt.Sprintf("02:%s:00:%02x:%02x:%02x", prefix, n&0xff, (n>>8)&0xff, (n>>16)&0xff)
+	dev, err := store.Create(context.Background(), &device.Device{MAC: mac, RegisteredAt: time.Now().UTC()})
 	if err != nil { t.Fatal(err) }
+	return store, dev
+}
 
+func TestPipelinePersistsOnceWhenInferenceUnavailable(t *testing.T) {
+	ctx := context.Background()
+	store, dev := testStoreAndDevice(t, "30")
 	frames, err := storage.NewFrameStore(storage.FrameStoreConfig{LocalPath: t.TempDir()})
 	if err != nil { t.Fatal(err) }
 	defer frames.Close()
@@ -50,4 +56,29 @@ func TestPipelinePersistsOnceWhenInferenceUnavailable(t *testing.T) {
 	got, err := frames.Retrieve(ctx, events[0].FrameKey)
 	if err != nil { t.Fatal(err) }
 	if string(got) != "pilot-frame" { t.Fatalf("stored frame=%q", string(got)) }
+}
+
+func TestPipelineReleasesClaimWhenStorageFails(t *testing.T) {
+	ctx := context.Background()
+	store, dev := testStoreAndDevice(t, "31")
+	root := filepath.Join(t.TempDir(), "frames")
+	frames, err := storage.NewFrameStore(storage.FrameStoreConfig{LocalPath: root})
+	if err != nil { t.Fatal(err) }
+	defer frames.Close()
+	if err := os.RemoveAll(root); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(root, []byte("block-directory-creation"), 0600); err != nil { t.Fatal(err) }
+
+	p := NewPipeline(PipelineConfig{
+		FrameStore: frames, DeviceStore: store,
+		Inference: inference.NewService(inference.Config{OllamaURL: "http://127.0.0.1:1", Model: "llava"}),
+		Alerts: alerts.NewService(alerts.Config{}), Workers: 1, QueueSize: 2, RateLimitPerMinute: 10,
+	})
+	p.Start()
+	ts := time.Now().UTC().Truncate(time.Second)
+	if err := p.Submit(ctx, &FrameJob{DeviceID: dev.ID, Timestamp: ts, ImageData: []byte("retry-me"), ReceivedAt: time.Now().UTC()}); err != nil { t.Fatal(err) }
+	p.Stop()
+
+	claimed, err := store.ClaimFrame(ctx, dev.ID, ts)
+	if err != nil { t.Fatal(err) }
+	if !claimed { t.Fatal("storage failure left frame receipt claimed; retry would be lost") }
 }
