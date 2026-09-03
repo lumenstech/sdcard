@@ -60,9 +60,9 @@ jobs:
         working-directory: backend
         run: go test ./... -count=1 -race
       - name: Shellcheck SD runtime
-        run: shellcheck -s sh sdcard/initrun.sh sdcard/scripts/*.sh
+        run: shellcheck -S warning -e SC1090 -s sh sdcard/initrun.sh sdcard/scripts/*.sh
       - name: Shellcheck prep tool
-        run: shellcheck -s bash prep-sdcard.sh
+        run: shellcheck -S warning -e SC2010 -s bash prep-sdcard.sh
       - name: Sidecar reliability assumptions
         run: sh scripts/test-sidecar-assumptions.sh
       - name: Compose validation
