@@ -64,6 +64,6 @@ jobs:
       - name: Shellcheck prep tool
         run: shellcheck -s bash prep-sdcard.sh
       - name: Sidecar reliability assumptions
-        run: ./scripts/test-sidecar-assumptions.sh
+        run: sh scripts/test-sidecar-assumptions.sh
       - name: Compose validation
         run: VALID_API_KEYS=pilot-test-key docker compose config --quiet
