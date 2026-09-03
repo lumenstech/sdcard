@@ -2,7 +2,7 @@ name: Pilot CI
 
 on:
   push:
-    branches: [pilot-hardening]
+    branches: [main, pilot-hardening, post-merge-release-gate]
   pull_request:
     branches: [main]
 
@@ -42,7 +42,7 @@ jobs:
         working-directory: backend
         run: go mod tidy
       - name: Commit module checksums if generated
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
         run: |
           if ! git diff --quiet -- backend/go.mod backend/go.sum; then
             git config user.name secure4k-release-bot
@@ -51,6 +51,9 @@ jobs:
             git commit -m 'build: refresh go module checksums'
             git push
           fi
+      - name: Verify main has no module drift
+        if: github.ref == 'refs/heads/main'
+        run: git diff --exit-code -- backend/go.mod backend/go.sum
       - name: Apply migration
         run: psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/migrations/001_initial.sql
       - name: Go vet
