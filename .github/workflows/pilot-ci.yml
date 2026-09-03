@@ -2,7 +2,7 @@ name: Pilot CI
 
 on:
   push:
-    branches: [main, pilot-hardening, post-merge-release-gate]
+    branches: [main, pilot-hardening, post-merge-release-gate, doorbell-pilot-v0.1.0]
   pull_request:
     branches: [main]
 
@@ -63,13 +63,42 @@ jobs:
         working-directory: backend
         run: go test ./... -count=1 -race
       - name: Shellcheck SD runtime
-        run: shellcheck -S warning -e SC1090 -s sh sdcard/initrun.sh sdcard/scripts/*.sh
+        run: shellcheck -S warning -e SC1090 -s sh sdcard/initrun.sh sdcard/scripts/*.sh scripts/package-doorbell-pilot.sh
       - name: Shellcheck prep tool
         run: shellcheck -S warning -e SC2010 -s bash prep-sdcard.sh
       - name: Sidecar reliability assumptions
         run: sh scripts/test-sidecar-assumptions.sh
       - name: Compose validation
         run: VALID_API_KEYS=pilot-test-key docker compose config --quiet
+
+  package-doorbell-pilot:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build versioned SD package
+        run: make sd-card
+      - name: Verify package contents and checksum
+        run: |
+          VERSION=$(cat sdcard/config/version)
+          NAME="secure4k-sidecar-doorbell-pilot-v${VERSION}"
+          unzip -l "dist/${NAME}.zip"
+          test -f "dist/${NAME}.zip.sha256"
+          sha256sum -c "dist/${NAME}.zip.sha256"
+          unzip -p "dist/${NAME}.zip" "${NAME}/RELEASE-MANIFEST.txt" | grep -F "Target: Chinese doorbell/IP camera pilot"
+          unzip -p "dist/${NAME}.zip" "${NAME}/config/version" | grep -Fx "${VERSION}"
+          unzip -l "dist/${NAME}.zip" | grep -F "${NAME}/initrun.sh"
+          unzip -l "dist/${NAME}.zip" | grep -F "${NAME}/scripts/capture_loop.sh"
+          unzip -l "dist/${NAME}.zip" | grep -F "${NAME}/scripts/upload_daemon.sh"
+      - name: Upload doorbell pilot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secure4k-sidecar-doorbell-pilot-v0.1.0
+          path: |
+            dist/secure4k-sidecar-doorbell-pilot-v0.1.0.zip
+            dist/secure4k-sidecar-doorbell-pilot-v0.1.0.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
 
   compose-smoke:
     needs: verify
