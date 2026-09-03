@@ -34,16 +34,7 @@ soak:
 	sh scripts/soak-test.sh
 
 sd-card:
-	@echo "Packaging SD card files..."
-	@mkdir -p dist
-	@rm -rf dist/sdcard
-	@cp -r sdcard dist/sdcard
-	@chmod +x dist/sdcard/initrun.sh dist/sdcard/scripts/*.sh
-	@cd dist/sdcard && ln -sf initrun.sh run.sh
-	@cd dist/sdcard && ln -sf initrun.sh custom.sh
-	@mkdir -p dist/sdcard/buffer
-	@cd dist && zip -r secure4k-sidecar-sdcard.zip sdcard/
-	@echo "SD card package ready: dist/secure4k-sidecar-sdcard.zip"
+	sh scripts/package-doorbell-pilot.sh
 
 clean:
 	rm -rf bin/ dist/

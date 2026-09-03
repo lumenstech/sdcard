@@ -13,7 +13,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDCARD_SRC="${SCRIPT_DIR}/sdcard"
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -26,7 +25,6 @@ echo "║   Secure4K Sidecar — SD Card Prep Tool      ║"
 echo "╚══════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ---- Validate target ----
 if [ $# -lt 1 ]; then
     echo -e "${YELLOW}Usage: $0 /path/to/mounted/sdcard${NC}"
     echo ""
@@ -46,7 +44,6 @@ if [ ! -d "${TARGET}" ]; then
     exit 1
 fi
 
-# Check it looks like a mounted SD card (has some free space, is writable)
 if [ ! -w "${TARGET}" ]; then
     echo -e "${RED}ERROR: ${TARGET} is not writable${NC}"
     exit 1
@@ -55,7 +52,6 @@ fi
 echo -e "${GREEN}Target: ${TARGET}${NC}"
 echo ""
 
-# ---- Collect device info ----
 echo -e "${CYAN}Device Configuration${NC}"
 echo "─────────────────────"
 
@@ -104,33 +100,25 @@ if [[ ! "${CONFIRM}" =~ ^[Yy] ]]; then
     exit 0
 fi
 
-# ---- Copy files ----
 echo ""
 echo -e "${CYAN}Copying sidecar files...${NC}"
 
-# Clean any previous sidecar install
-rm -rf "${TARGET}/scripts" "${TARGET}/config" "${TARGET}/buffer"
+rm -rf "${TARGET}/scripts" "${TARGET}/config" "${TARGET}/buffer" "${TARGET}/updates"
 rm -f "${TARGET}/initrun.sh" "${TARGET}/run.sh" "${TARGET}/custom.sh"
 rm -f "${TARGET}/sidecar.log" "${TARGET}/sidecar.pid"
 
-# Copy sidecar directory contents to SD card root
 cp -r "${SDCARD_SRC}/scripts" "${TARGET}/"
-mkdir -p "${TARGET}/config"
-mkdir -p "${TARGET}/buffer"
+mkdir -p "${TARGET}/config" "${TARGET}/buffer" "${TARGET}/updates"
 
-# Copy boot script
 cp "${SDCARD_SRC}/initrun.sh" "${TARGET}/initrun.sh"
+# FAT32 does not reliably support Unix symlinks. Use real boot-hook copies.
+cp "${SDCARD_SRC}/initrun.sh" "${TARGET}/run.sh"
+cp "${SDCARD_SRC}/initrun.sh" "${TARGET}/custom.sh"
+cp "${SDCARD_SRC}/config/version" "${TARGET}/config/version"
 
-# Create symlinks for different camera boot hooks
-cd "${TARGET}"
-ln -sf initrun.sh run.sh
-ln -sf initrun.sh custom.sh
-
-# Make scripts executable
-chmod +x "${TARGET}/initrun.sh"
+chmod +x "${TARGET}/initrun.sh" "${TARGET}/run.sh" "${TARGET}/custom.sh"
 chmod +x "${TARGET}/scripts/"*.sh
 
-# ---- Write config ----
 echo -e "${CYAN}Writing device config...${NC}"
 
 cat > "${TARGET}/config/device.conf" <<EOF
@@ -151,18 +139,19 @@ WIFI_SSID="${WIFI_SSID}"
 WIFI_PASS="${WIFI_PASS:-}"
 EOF
 
-# ---- Verify ----
 echo ""
 echo -e "${CYAN}Verifying...${NC}"
 
 FILE_COUNT=$(find "${TARGET}/scripts" -name "*.sh" | wc -l)
-echo "  Scripts:  ${FILE_COUNT} files"
-echo "  Config:   $([ -f "${TARGET}/config/device.conf" ] && echo 'OK' || echo 'MISSING')"
-echo "  Buffer:   $([ -d "${TARGET}/buffer" ] && echo 'OK' || echo 'MISSING')"
-echo "  Boot:     $([ -f "${TARGET}/initrun.sh" ] && echo 'OK' || echo 'MISSING')"
-echo "  Symlinks: $([ -L "${TARGET}/run.sh" ] && echo 'OK' || echo 'MISSING')"
+echo "  Scripts:     ${FILE_COUNT} files"
+echo "  Config:      $([ -f "${TARGET}/config/device.conf" ] && echo 'OK' || echo 'MISSING')"
+echo "  Version:     $([ -f "${TARGET}/config/version" ] && cat "${TARGET}/config/version" || echo 'MISSING')"
+echo "  Buffer:      $([ -d "${TARGET}/buffer" ] && echo 'OK' || echo 'MISSING')"
+echo "  Updates:     $([ -d "${TARGET}/updates" ] && echo 'OK' || echo 'MISSING')"
+echo "  initrun.sh:  $([ -f "${TARGET}/initrun.sh" ] && echo 'OK' || echo 'MISSING')"
+echo "  run.sh:      $([ -f "${TARGET}/run.sh" ] && echo 'OK' || echo 'MISSING')"
+echo "  custom.sh:   $([ -f "${TARGET}/custom.sh" ] && echo 'OK' || echo 'MISSING')"
 
-# ---- Eject hint ----
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   SD card ready!                             ║${NC}"
@@ -170,13 +159,12 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo "Next steps:"
 echo "  1. Safely eject the SD card"
-echo "  2. Insert into the customer's camera"
+echo "  2. Insert into the pilot doorbell/IP camera"
 echo "  3. Power cycle the camera"
 echo "  4. Wait 2-3 minutes for boot + registration"
-echo "  5. Check backend dashboard for the new device"
+echo "  5. Check backend for the new device and first frame"
 echo ""
 
-# Attempt safe eject on macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
     read -rp "Eject ${TARGET} now? [y/N]: " EJECT
     if [[ "${EJECT}" =~ ^[Yy] ]]; then
