@@ -1,0 +1,135 @@
+version: "3.9"
+
+services:
+  # ---- Go ingest server ----
+  ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      PORT: "8090"
+      DATABASE_URL: "postgres://secure4k:secure4k@postgres:5432/sidecar?sslmode=disable"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_BUCKET: "sidecar-frames"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin"
+      S3_REGION: "us-east-1"
+      LOCAL_FRAME_PATH: "/data/frames"
+      OLLAMA_URL: "http://ollama:11434"
+      INFERENCE_MODEL: "llava"
+      INFERENCE_THRESHOLD: "0.6"
+      SEQUENCENOW_URL: "${SEQUENCENOW_URL}"
+      SEQUENCENOW_API_KEY: "${SEQUENCENOW_API_KEY}"
+      MQTT_BROKER_URL: "tcp://mosquitto:1883"
+      VALID_API_KEYS: "${VALID_API_KEYS}"
+      PIPELINE_WORKERS: "4"
+      PIPELINE_QUEUE_SIZE: "1000"
+      OTA_BUNDLE_PATH: "/data/ota"
+    volumes:
+      - frame-data:/data/frames
+      - ota-data:/data/ota
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+      minio:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---- PostgreSQL ----
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: secure4k
+      POSTGRES_PASSWORD: secure4k
+      POSTGRES_DB: sidecar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secure4k -d sidecar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- MQTT broker ----
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./backend/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+    restart: unless-stopped
+
+  # ---- S3-compatible storage ----
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  # ---- MinIO bucket init ----
+  minio-init:
+    image: minio/mc:latest
+    entrypoint: >
+      /bin/sh -c "
+        sleep 5;
+        mc alias set local http://minio:9000 minioadmin minioadmin;
+        mc mb local/sidecar-frames --ignore-existing;
+        mc anonymous set download local/sidecar-frames;
+        echo 'Bucket ready';
+      "
+    depends_on:
+      - minio
+
+  # ---- Ollama (AI inference) ----
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ---- Pull vision model on first run ----
+  ollama-init:
+    image: ollama/ollama:latest
+    entrypoint: >
+      /bin/sh -c "
+        sleep 10;
+        ollama pull llava:7b;
+        echo 'Model ready';
+      "
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    depends_on:
+      - ollama
+
+volumes:
+  pg-data:
+  mqtt-data:
+  minio-data:
+  ollama-data:
+  frame-data:
+  ota-data:
